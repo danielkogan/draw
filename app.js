@@ -58,6 +58,8 @@ const cache = {}; // id -> { mesh, geom, colors, normals, positions, undo[], adj
 
 // ---------- dino loading ----------
 
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+
 const worker = new Worker('./worker.js', { type: 'module' });
 const pending = {};
 worker.onmessage = (e) => {
