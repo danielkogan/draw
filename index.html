@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Дино-раскраска">
+<title>Дино-раскраска</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<nav id="dinos"></nav>
+
+<aside id="palette">
+  <div id="swatches"></div>
+  <label class="swatch custom" title="Свой цвет">
+    <input type="color" id="customColor" value="#3fa7d6">
+  </label>
+</aside>
+
+<aside id="tools">
+  <div class="group" id="sizes">
+    <button data-size="0.07" aria-label="Тонкая кисть"><i style="--d:8px"></i></button>
+    <button data-size="0.15" aria-label="Средняя кисть" class="on"><i style="--d:16px"></i></button>
+    <button data-size="0.3" aria-label="Толстая кисть"><i style="--d:26px"></i></button>
+  </div>
+  <div class="group" id="modes">
+    <button data-tool="brush" class="on" aria-label="Кисть">🖌️</button>
+    <button data-tool="fill" aria-label="Заливка">🪣</button>
+    <button data-tool="eraser" aria-label="Ластик">🧽</button>
+    <button data-tool="rotate" aria-label="Вращать">✋</button>
+  </div>
+  <div class="group">
+    <button id="undo" aria-label="Отменить">↩️</button>
+    <button id="clear" aria-label="Очистить">🗑️</button>
+    <button id="save" aria-label="Сохранить картинку">📷</button>
+  </div>
+</aside>
+
+<div id="loading"><div class="spinner"></div></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
