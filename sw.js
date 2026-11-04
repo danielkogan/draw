@@ -1,7 +1,7 @@
 // Caches the app so it works offline once installed to the home screen.
 const CACHE = 'dino-v1';
 const FILES = [
-  './', 'index.html', 'style.css', 'app.js', 'dinos.js', 'worker.js', 'icon.png',
+  './', 'index.html', 'style.css', 'app.js', 'dinos.js', 'grid.js', 'worker.js', 'icon.png',
   'manifest.json', 'vendor/three.module.js', 'vendor/controls/OrbitControls.js',
 ];
 
