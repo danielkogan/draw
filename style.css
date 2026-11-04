@@ -1,6 +1,6 @@
 :root {
   --bg: #f3f1ec;
-  --panel: rgba(255, 255, 255, 0.82);
+  --panel: rgba(255, 255, 255, 0.94);
   --ink: #2b2a27;
   --muted: #8a8780;
   --accent: #2b2a27;
@@ -35,8 +35,6 @@ html, body {
 aside, nav {
   position: fixed;
   background: var(--panel);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border-radius: 22px;
   box-shadow: 0 6px 24px rgba(40, 35, 25, 0.12);
   padding: var(--gap);
@@ -163,8 +161,8 @@ aside, nav {
   border-radius: 50%;
   border: 5px solid rgba(0, 0, 0, 0.1);
   border-top-color: var(--ink);
-  animation: spin 0.8s linear infinite;
 }
+#loading.show .spinner { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-height: 700px), (max-width: 700px) {

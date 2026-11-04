@@ -2,6 +2,8 @@
 // smoothly blended primitives, meshed with surface nets.
 // Axes: +x = forward (head), +y = up, z = sideways. Ground at y = 0.
 
+import { buildGrid } from './grid.js';
+
 // ---------- SDF primitives ----------
 
 function smin(a, b, k) {
@@ -379,5 +381,5 @@ export function buildDino(id, cell = 0.035) {
   }
 
   const indices = positions.length / 3 > 65535 ? new Uint32Array(idx) : new Uint16Array(idx);
-  return { positions, normals, indices, eyes };
+  return { positions, normals, indices, eyes, grid: buildGrid(positions, indices) };
 }

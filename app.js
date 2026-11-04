@@ -1,6 +1,7 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from './vendor/three.module.js';
+import { OrbitControls } from './vendor/controls/OrbitControls.js';
 import { DINOS } from './dinos.js';
+import { raycastGrid, forVerticesNear } from './grid.js';
 
 const COLORS = [
   '#e53935', '#fb8c00', '#fdd835', '#ffe9a8',
@@ -14,10 +15,11 @@ const STORE_KEY = 'dino-paint-v1:';
 // ---------- scene ----------
 
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, stencil: false });
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// The light and the dino never move, so the shadow only changes with the dino.
+renderer.shadowMap.autoUpdate = false;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#f3f1ec');
@@ -28,7 +30,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0xcfc8bb, 1.9));
 const sun = new THREE.DirectionalLight(0xffffff, 1.9);
 sun.position.set(3, 9, 6);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 0.5, far: 30 });
 sun.shadow.radius = 6;
 sun.shadow.bias = -0.0005;
@@ -38,7 +40,7 @@ rim.position.set(-5, 3, -6);
 scene.add(rim);
 
 const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(60, 60),
+  new THREE.PlaneGeometry(1, 1),
   new THREE.ShadowMaterial({ opacity: 0.13 }),
 );
 ground.rotation.x = -Math.PI / 2;
@@ -54,7 +56,30 @@ const state = {
   tool: 'brush',
   dino: null, // current entry from cache
 };
-const cache = {}; // id -> { mesh, geom, colors, normals, positions, undo[], adj }
+const cache = {}; // id -> { mesh, geom, colors, normals, positions, grid, undo[], adj }
+
+// Frames are only drawn when something changed.
+let needsRender = true;
+
+function sceneChanged() {
+  renderer.shadowMap.needsUpdate = true;
+  needsRender = true;
+}
+
+// Colors changed for vertices lo..hi; they reach the GPU with the next frame.
+function touchColors(entry, lo = 0, hi = entry.positions.length / 3 - 1) {
+  entry.dirtyLo = Math.min(entry.dirtyLo, lo);
+  entry.dirtyHi = Math.max(entry.dirtyHi, hi);
+  needsRender = true;
+}
+
+function flushColors(entry) {
+  if (entry.dirtyHi < entry.dirtyLo) return;
+  entry.colorAttr.addUpdateRange(entry.dirtyLo * 3, (entry.dirtyHi - entry.dirtyLo + 1) * 3);
+  entry.colorAttr.needsUpdate = true;
+  entry.dirtyLo = Infinity;
+  entry.dirtyHi = -1;
+}
 
 // ---------- dino loading ----------
 
@@ -100,7 +125,10 @@ function makeEntry(id, data) {
     mesh.add(eye);
   }
 
-  const entry = { id, mesh, geom, colors, colorAttr, positions: data.positions, normals: data.normals, undo: [], adj: null };
+  const entry = {
+    id, mesh, geom, colors, colorAttr, positions: data.positions, normals: data.normals, grid: data.grid,
+    undo: [], adj: null, dirtyLo: Infinity, dirtyHi: -1,
+  };
   loadColors(entry);
   return entry;
 }
@@ -112,7 +140,10 @@ async function selectDino(id) {
   const token = ++loadToken;
   document.querySelectorAll('#dinos button').forEach((b) => b.classList.toggle('on', b.dataset.id === id));
   try { localStorage.setItem(STORE_KEY + 'last', id); } catch {}
-  if (state.dino) scene.remove(state.dino.mesh);
+  if (state.dino) {
+    scene.remove(state.dino.mesh);
+    sceneChanged();
+  }
   state.dino = null;
 
   if (!cache[id]) {
@@ -124,7 +155,18 @@ async function selectDino(id) {
   if (token !== loadToken) return;
   state.dino = cache[id];
   scene.add(state.dino.mesh);
+  fitGround(state.dino.geom.boundingBox);
   fitCamera(state.dino.geom.boundingBox);
+  sceneChanged();
+}
+
+// The ground only catches the dino's shadow, and every pixel it covers has to
+// sample the shadow map, so keep it just big enough for that shadow.
+function fitGround(box) {
+  const x0 = box.min.x - (box.max.y * sun.position.x) / sun.position.y - 1, x1 = box.max.x + 1;
+  const z0 = box.min.z - (box.max.y * sun.position.z) / sun.position.y - 1, z1 = box.max.z + 1;
+  ground.scale.set(x1 - x0, z1 - z0, 1);
+  ground.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
 }
 
 // Free area between the UI panels; the camera is centered and fitted to it.
@@ -162,13 +204,14 @@ function fitCamera(box) {
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
-function hitAt(clientX, clientY) {
-  if (!state.dino) return null;
+function localHit(clientX, clientY) {
+  const entry = state.dino;
+  if (!entry) return null;
   const r = canvas.getBoundingClientRect();
   ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObject(state.dino.mesh, false)[0];
-  return hit || null;
+  const { origin: o, direction: d } = raycaster.ray;
+  return raycastGrid(entry.grid, entry.positions, entry.geom.index.array, o.x, o.y, o.z, d.x, d.y, d.z);
 }
 
 function stamp(entry, p, n, target, radius) {
@@ -176,20 +219,24 @@ function stamp(entry, p, n, target, radius) {
   const r2 = radius * radius;
   const tr = target.r, tg = target.g, tb = target.b;
   const px = p.x, py = p.y, pz = p.z, nx = n.x, ny = n.y, nz = n.z;
-  for (let i = 0, len = P.length; i < len; i += 3) {
+  let lo = Infinity, hi = -1;
+  forVerticesNear(entry.grid, px, py, pz, radius, (v) => {
+    const i = 3 * v;
     const dx = P[i] - px, dy = P[i + 1] - py, dz = P[i + 2] - pz;
     const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 > r2) continue;
+    if (d2 > r2) return;
     // don't bleed through to the far side of thin parts
-    if (N[i] * nx + N[i + 1] * ny + N[i + 2] * nz < -0.15) continue;
+    if (N[i] * nx + N[i + 1] * ny + N[i + 2] * nz < -0.15) return;
     const t = Math.sqrt(d2) / radius;
     let w = t < 0.65 ? 1 : 1 - (t - 0.65) / 0.35;
     w = w * w * (3 - 2 * w);
     Cc[i] += (tr - Cc[i]) * w;
     Cc[i + 1] += (tg - Cc[i + 1]) * w;
     Cc[i + 2] += (tb - Cc[i + 2]) * w;
-  }
-  entry.colorAttr.needsUpdate = true;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  });
+  if (hi >= lo) touchColors(entry, lo, hi);
 }
 
 function pushUndo(entry) {
@@ -274,19 +321,11 @@ function floodFill(entry, hit, target) {
     }
     ring = next;
   }
-  entry.colorAttr.needsUpdate = true;
+  touchColors(entry);
 }
 
 // stroke handling
 let stroke = null; // { id, lastX, lastY, entry }
-const tmpLocal = new THREE.Vector3();
-
-function localHit(x, y) {
-  const hit = hitAt(x, y);
-  if (!hit) return null;
-  hit.local = state.dino.mesh.worldToLocal(tmpLocal.copy(hit.point)).clone();
-  return hit;
-}
 
 function paintAt(x, y) {
   const hit = localHit(x, y);
@@ -423,7 +462,7 @@ document.getElementById('undo').onclick = () => {
   const entry = state.dino;
   if (!entry || !entry.undo.length) return;
   entry.colors.set(entry.undo.pop());
-  entry.colorAttr.needsUpdate = true;
+  touchColors(entry);
   saveColorsSoon(entry);
 };
 
@@ -432,12 +471,12 @@ document.getElementById('clear').onclick = () => {
   if (!entry) return;
   pushUndo(entry);
   for (let i = 0; i < entry.colors.length; i += 3) BASE.toArray(entry.colors, i);
-  entry.colorAttr.needsUpdate = true;
+  touchColors(entry);
   saveColorsSoon(entry);
 };
 
 document.getElementById('save').onclick = async () => {
-  renderer.render(scene, camera);
+  draw(); // the canvas can only be read right after drawing
   const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
   const name = `dino-${state.dino?.id || 'art'}-${Date.now()}.png`;
   const file = new File([blob], name, { type: 'image/png' });
@@ -457,11 +496,45 @@ document.addEventListener('dblclick', (e) => e.preventDefault());
 
 // ---------- loop ----------
 
+// Pixel ratio steps down while the frame rate is low. Each launch starts one
+// step above the last result, so a one-off slow session doesn't stick forever.
+const PIXEL_RATIOS = [2, 1.5, 1.25, 1];
+const QUALITY_KEY = STORE_KEY + 'quality';
+let quality = 0;
+try { quality = Math.max(0, (parseInt(localStorage.getItem(QUALITY_KEY), 10) || 0) - 1); } catch {}
+
+function applyQuality() {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, PIXEL_RATIOS[quality]));
+  try { localStorage.setItem(QUALITY_KEY, quality); } catch {}
+}
+applyQuality();
+
+const frameTimes = [];
+let lastFrame = 0; // previous frame's time, 0 if nothing was drawn then
+
+function watchFrameRate(now) {
+  if (lastFrame) frameTimes.push(now - lastFrame);
+  lastFrame = now;
+  if (frameTimes.length < 24) return;
+  const median = frameTimes.sort((a, b) => a - b)[12];
+  frameTimes.length = 0;
+  if (median > 25 && quality < PIXEL_RATIOS.length - 1) {
+    quality++;
+    applyQuality();
+  }
+}
+
+function draw() {
+  if (state.dino) flushColors(state.dino);
+  renderer.render(scene, camera);
+}
+
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  needsRender = true;
 }
 window.addEventListener('resize', () => {
   resize();
@@ -469,9 +542,20 @@ window.addEventListener('resize', () => {
 });
 resize();
 
-renderer.setAnimationLoop(() => {
-  controls.update();
-  renderer.render(scene, camera);
+controls.addEventListener('change', () => { needsRender = true; });
+// iOS can drop the canvas contents or the whole context in the background.
+document.addEventListener('visibilitychange', () => { needsRender = true; });
+canvas.addEventListener('webglcontextrestored', sceneChanged);
+
+renderer.setAnimationLoop((now) => {
+  controls.update(); // keeps the damping going after the finger lifts
+  if (!needsRender) {
+    lastFrame = 0;
+    return;
+  }
+  needsRender = false;
+  watchFrameRate(now); // may resize the canvas, so it has to come before draw
+  draw();
 });
 
 let last;
